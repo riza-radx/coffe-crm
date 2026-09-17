@@ -1,0 +1,338 @@
+// Rei CRM — Phase 1 (Foundation) + Phase 3 (Money logic)
+// Phase 1: users, clients, contracts, bills, commissions, invites.
+// Phase 3 adds audit_logs: every money mutation (bill verification, commission
+// approval and payment) writes its entry inside the same transaction, so the
+// reversal of a commission is never an unexplained disappearance.
+// Phase 5 adds notifications (in-app feed, written inside the transaction that
+// caused them) and revenue_summaries (the nightly aggregate of section 9).
+// Phase 6 adds notification_preferences (per user and type; a missing row is the
+// default, so the table may stay empty for a user who never changes anything).
+// business_profile lands with /settings, which is not part of the MVP plan's phases.
+//
+// Prisma models keep their camelCase names; physical tables/columns are mapped to the
+// snake_case names used in section 2 of the technical plan.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  SALES
+  OUTSIDE_SALES
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum ClientType {
+  BAR
+  RESTAURANT
+  HOTEL
+  HOME
+  OFFICE
+  OTHER
+}
+
+enum ClientStatus {
+  LEAD
+  ACTIVE
+  INACTIVE
+  LOST
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+  RENEWED
+}
+
+enum BillStatus {
+  PENDING
+  VERIFIED
+  DISPUTED
+  VOID
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+}
+
+enum AuditEntityType {
+  CONTRACT
+  BILL
+  CLIENT
+  USER
+  COMMISSION
+}
+
+/**
+ * Section 2 lists `type (CONTRACT_EXPIRING, BILL_DISPUTED, COMMISSION_APPROVED,
+ * etc.)`; these are the "etc." resolved to exactly the events section 8 names as
+ * needing a notification, and nothing beyond them.
+ */
+enum NotificationType {
+  CONTRACT_EXPIRING
+  CONTRACT_EXPIRED
+  BILL_DISPUTED
+  COMMISSION_APPROVED
+  COMMISSION_PAID
+  INVITE_ACCEPTED
+}
+
+/** The two grains section 6 asks for: revenue per client, commissions per rep. */
+enum SummaryGrain {
+  CLIENT
+  SALES_REP
+}
+
+/** Section 8: "Digest vs. instant delivery", plus the obvious third option. */
+enum EmailDelivery {
+  OFF
+  INSTANT
+  DIGEST
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String?    @map("password_hash")
+  name         String
+  role         UserRole
+  status       UserStatus @default(INVITED)
+  invitedById  String?    @map("invited_by")
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  clientsAcquired Client[]     @relation("AcquiredBy")
+  contractsOwned  Contract[]   @relation("SalesOwner")
+  billsEntered    Bill[]       @relation("EnteredBy")
+  commissions     Commission[]
+  auditLogs       AuditLog[]   @relation("AuditActor")
+  notifications   Notification[]
+  notificationPreferences NotificationPreference[]
+
+  @@map("users")
+}
+
+model Client {
+  id           String       @id @default(cuid())
+  name         String
+  type         ClientType
+  address      String?
+  city         String?
+  contactName  String?      @map("contact_name")
+  contactPhone String?      @map("contact_phone")
+  contactEmail String?      @map("contact_email")
+  taxId        String?      @map("tax_id")
+  acquiredById String       @map("acquired_by")
+  acquiredBy   User         @relation("AcquiredBy", fields: [acquiredById], references: [id])
+  status       ClientStatus @default(LEAD)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  contracts Contract[]
+  bills     Bill[]
+
+  @@index([status])
+  @@index([acquiredById])
+  @@map("clients")
+}
+
+model Contract {
+  id                   String         @id @default(cuid())
+  clientId             String         @map("client_id")
+  client               Client         @relation(fields: [clientId], references: [id])
+  salesOwnerId         String         @map("sales_owner_id")
+  salesOwner           User           @relation("SalesOwner", fields: [salesOwnerId], references: [id])
+  commissionPercentage Decimal        @map("commission_percentage") @db.Decimal(5, 2)
+  startDate            DateTime       @map("start_date")
+  endDate              DateTime?      @map("end_date")
+  status               ContractStatus @default(DRAFT)
+  previousContractId   String?        @unique @map("previous_contract_id")
+  previousContract     Contract?      @relation("ContractRenewal", fields: [previousContractId], references: [id])
+  renewedInto          Contract?      @relation("ContractRenewal")
+  paymentTerms         String?        @map("payment_terms")
+  notes                String?
+  signedDocumentUrl    String?        @map("signed_document_url")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+
+  bills       Bill[]
+  commissions Commission[]
+
+  @@index([clientId, status])
+  @@index([status, endDate])
+  @@index([salesOwnerId])
+  @@map("contracts")
+}
+
+model Bill {
+  id            String     @id @default(cuid())
+  contractId    String     @map("contract_id")
+  contract      Contract   @relation(fields: [contractId], references: [id])
+  clientId      String     @map("client_id")
+  client        Client     @relation(fields: [clientId], references: [id])
+  billNumber    String     @map("bill_number")
+  amount        Decimal    @db.Decimal(14, 2)
+  currency      String     @default("ALL")
+  billDate      DateTime   @map("bill_date")
+  enteredById   String     @map("entered_by")
+  enteredBy     User       @relation("EnteredBy", fields: [enteredById], references: [id])
+  attachmentUrl String?    @map("attachment_url")
+  status        BillStatus @default(PENDING)
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  commission Commission?
+
+  @@index([contractId, billDate])
+  @@index([status])
+  @@map("bills")
+}
+
+model Commission {
+  id                           String           @id @default(cuid())
+  billId                       String           @unique @map("bill_id")
+  bill                         Bill             @relation(fields: [billId], references: [id])
+  contractId                   String           @map("contract_id")
+  contract                     Contract         @relation(fields: [contractId], references: [id])
+  salesUserId                  String           @map("sales_user_id")
+  salesUser                    User             @relation(fields: [salesUserId], references: [id])
+  commissionPercentageSnapshot Decimal          @map("commission_percentage_snapshot") @db.Decimal(5, 2)
+  baseAmount                   Decimal          @map("base_amount") @db.Decimal(14, 2)
+  commissionAmount             Decimal          @map("commission_amount") @db.Decimal(14, 2)
+  status                       CommissionStatus @default(PENDING)
+  paidAt                       DateTime?        @map("paid_at")
+  paidById                     String?          @map("paid_by")
+  createdAt                    DateTime         @default(now()) @map("created_at")
+
+  @@index([salesUserId, status])
+  @@index([contractId])
+  @@map("commissions")
+}
+
+/**
+ * Append-only. Nothing in the application updates or deletes a row here, and
+ * `entity_id` is deliberately not a foreign key: a commission reversed by a
+ * disputed bill is deleted, and its audit row has to outlive it.
+ */
+model AuditLog {
+  id         String          @id @default(cuid())
+  actorId    String?         @map("actor_id")
+  actor      User?           @relation("AuditActor", fields: [actorId], references: [id])
+  entityType AuditEntityType @map("entity_type")
+  entityId   String          @map("entity_id")
+  action     String
+  diff       Json?
+  ipAddress  String?         @map("ip_address")
+  createdAt  DateTime        @default(now()) @map("created_at")
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
+
+/**
+ * The in-app feed of section 8. A row is written inside the transaction that
+ * caused it, so a refused mutation never leaves a notification behind — the same
+ * discipline as audit_logs. Email is a separate, off-transaction concern: the
+ * worker sends it from a pg-boss job enqueued after the commit.
+ *
+ * `entity_type` reuses AuditEntityType rather than declaring a second copy of the
+ * same five values; both columns answer "which record is this about".
+ */
+model Notification {
+  id         String           @id @default(cuid())
+  userId     String           @map("user_id")
+  user       User             @relation(fields: [userId], references: [id])
+  type       NotificationType
+  title      String
+  body       String
+  readAt     DateTime?        @map("read_at")
+  entityType AuditEntityType? @map("entity_type")
+  entityId   String?          @map("entity_id")
+  createdAt  DateTime         @default(now()) @map("created_at")
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+/**
+ * Phase 6, step 19. The plan names the feature ("Notification preferences",
+ * "Digest vs. instant delivery") but not its shape, so two rules keep it small:
+ *
+ *  - One row per (user, type). A missing row is not "no preference" but the
+ *    default every user has today — in-app on, email instant — so the table can
+ *    stay empty and nothing changes for anybody who never opens the settings.
+ *  - `in_app` hides a type from the bell; it does not stop the row being written.
+ *    The notification is the record that the event happened, and an email still
+ *    has to be able to point at it.
+ */
+model NotificationPreference {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  inApp     Boolean          @default(true) @map("in_app")
+  email     EmailDelivery    @default(INSTANT)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  @@unique([userId, type])
+  @@map("notification_preferences")
+}
+
+/**
+ * The nightly aggregate of section 9, one row per (grain, subject, month).
+ *
+ * The rollup is computed by the *same* SQL builder the live analytics use
+ * (lib/queries/analytics-sql.ts), so a summary row and a live query can never
+ * disagree about what counts as revenue. `commission_*` is meaningful only at the
+ * SALES_REP grain — section 6 asks for "revenue per client per month and
+ * commission totals per rep per month" — and stays 0 for CLIENT rows.
+ */
+model RevenueSummary {
+  id               String       @id @default(cuid())
+  grain            SummaryGrain
+  /** clients.id for CLIENT, users.id for SALES_REP. No FK: a summary outlives a row. */
+  subjectId        String       @map("subject_id")
+  /** First day of the month, UTC. */
+  periodMonth      DateTime     @map("period_month") @db.Date
+  revenue          Decimal      @db.Decimal(14, 2)
+  billCount        Int          @map("bill_count")
+  commissionAmount Decimal      @default(0) @map("commission_amount") @db.Decimal(14, 2)
+  commissionCount  Int          @default(0) @map("commission_count")
+  computedAt       DateTime     @default(now()) @map("computed_at")
+
+  @@unique([grain, subjectId, periodMonth])
+  @@index([periodMonth])
+  @@map("revenue_summaries")
+}
+
+model Invite {
+  id          String    @id @default(cuid())
+  email       String
+  role        UserRole
+  token       String    @unique
+  invitedById String    @map("invited_by")
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([email])
+  @@map("invites")
+}

@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rei
+      POSTGRES_PASSWORD: rei_dev_password
+      POSTGRES_DB: rei_crm
+    ports:
+      - "5432:5432"
+    volumes:
+      - rei_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rei -d rei_crm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://rei:rei_dev_password@db:5432/rei_crm?schema=public
+      AUTH_SECRET: ${AUTH_SECRET:-change-me-in-every-environment}
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      AUTH_TRUST_HOST: "true"
+      NODE_ENV: production
+      MAIL_FROM: ${MAIL_FROM:-Rei CRM <no-reply@radx.app>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    ports:
+      - "3000:3000"
+
+  # Phase 5: the pg-boss worker — contract expiry sweep, nightly rollup, email.
+  # One replica, always; two would run every scheduled job twice.
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://rei:rei_dev_password@db:5432/rei_crm?schema=public
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      NODE_ENV: production
+      CONTRACT_EXPIRY_WARNING_DAYS: ${CONTRACT_EXPIRY_WARNING_DAYS:-30}
+      NIGHTLY_CRON: ${NIGHTLY_CRON:-15 2 * * *}
+      DIGEST_CRON: ${DIGEST_CRON:-0 6 * * *}
+      MONTHLY_REPORT_CRON: ${MONTHLY_REPORT_CRON:-30 6 1 * *}
+      MAIL_FROM: ${MAIL_FROM:-Rei CRM <no-reply@radx.app>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+
+volumes:
+  rei_pgdata:

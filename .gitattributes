@@ -1,0 +1,17 @@
+# Repoja shkruhet me LF dhe ndërtohet në Linux (Docker/Coolify), ndërsa puna
+# bëhet në Windows. Pa këtë skedar, git-i i Windows-it fut CRLF në indeks dhe
+# çdo pull/checkout nxjerr diff-e fantazmë në skedarë që s'i ka prekur askush.
+* text=auto eol=lf
+
+# Binarët nuk normalizohen kurrë.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Lock-u ndryshon shpesh dhe nuk lexohet me dorë: mbaje jashtë diff-it.
+package-lock.json -diff linguist-generated

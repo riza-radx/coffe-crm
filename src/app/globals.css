@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f7f5;
+  --surface: #ffffff;
+  --foreground: #1a1a17;
+  --muted: #6b6b63;
+  --border: #e2e2dc;
+  --primary: #6b4423;
+  --primary-foreground: #fdfcfa;
+  --danger: #a33a2a;
+
+  /*
+   * Chart palette (Phase 4). One set of tokens for every chart in the app, so
+   * revenue is the same blue on the dashboard and on the leaderboard.
+   *
+   * Categorical slots 1–2 carry the two measures that appear side by side
+   * (revenue, commission). The ordinal ramp carries the commission stages
+   * PENDING → APPROVED → PAID, which are ordered rather than unrelated, so they
+   * take one hue getting darker rather than three different hues.
+   *
+   * Both sets are validated against the surface below in light and dark:
+   * adjacent CVD ΔE 24.7 light / 26.8 dark (≥8), normal-vision ΔE 33.6 / 31.8
+   * (≥15), all slots ≥3:1 contrast; the ordinal ramp is monotone in lightness
+   * with its light end at 2.11:1 light / 3.05:1 dark.
+   */
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-step-1: #86b6ef;
+  --viz-step-2: #3987e5;
+  --viz-step-3: #1c5cab;
+  --viz-grid: #e2e2dc;
+  --viz-axis: #6b6b63;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #161513;
+    --surface: #201f1c;
+    --foreground: #f2f0eb;
+    --muted: #a3a099;
+    --border: #322f2a;
+    --primary: #c69063;
+    --primary-foreground: #1a1512;
+    --danger: #e08370;
+
+    /* Dark is selected, not an automatic flip: the same hues re-stepped for the
+       dark surface and re-validated against it. */
+    --viz-series-1: #3987e5;
+    --viz-series-2: #d95926;
+    --viz-step-1: #9ec5f4;
+    --viz-step-2: #5598e7;
+    --viz-step-3: #256abf;
+    --viz-grid: #322f2a;
+    --viz-axis: #a3a099;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-danger: var(--danger);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
